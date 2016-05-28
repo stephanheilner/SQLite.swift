@@ -28,15 +28,16 @@ public protocol ExpressionType : Expressible { // extensions cannot have inherit
 
     var template: String { get }
     var bindings: [Binding?] { get }
-
-    init(_ template: String, _ bindings: [Binding?])
+    var alias: String? { get }
+    
+    init(_ template: String, _ bindings: [Binding?], _ alias: String?)
 
 }
 
 extension ExpressionType {
 
-    public init(literal: String) {
-        self.init(literal, [])
+    public init(literal: String, alias: String? = nil) {
+        self.init(literal, [], alias)
     }
 
     public init(_ identifier: String) {
@@ -44,7 +45,7 @@ extension ExpressionType {
     }
 
     public init<U : ExpressionType>(_ expression: U) {
-        self.init(expression.template, expression.bindings)
+        self.init(expression.template, expression.bindings, expression.alias)
     }
 
 }
@@ -56,10 +57,12 @@ public struct Expression<Datatype> : ExpressionType {
 
     public var template: String
     public var bindings: [Binding?]
-
-    public init(_ template: String, _ bindings: [Binding?]) {
+    public var alias: String?
+    
+    public init(_ template: String, _ bindings: [Binding?], _ alias: String? = nil) {
         self.template = template
         self.bindings = bindings
+        self.alias = alias
     }
 
 }
@@ -95,7 +98,7 @@ extension Expressible {
 extension ExpressionType {
 
     public var expression: Expression<Void> {
-        return Expression(template, bindings)
+        return Expression(template, bindings, alias)
     }
 
     public var asc: Expressible {
@@ -111,7 +114,7 @@ extension ExpressionType {
 extension ExpressionType where UnderlyingType : Value {
 
     public init(value: UnderlyingType) {
-        self.init("?", [value.datatypeValue])
+        self.init("?", [value.datatypeValue], nil)
     }
 
 }
@@ -123,7 +126,7 @@ extension ExpressionType where UnderlyingType : _OptionalType, UnderlyingType.Wr
     }
 
     public init(value: UnderlyingType.WrappedType?) {
-        self.init("?", [value?.datatypeValue])
+        self.init("?", [value?.datatypeValue], nil)
     }
 
 }

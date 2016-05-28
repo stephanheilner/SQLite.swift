@@ -83,11 +83,86 @@ public final class Connection {
             }
         }
     }
+    
+    /// A sqlite3_open_v2 open flag.
+    public enum Flag {
+        
+        /// SQLITE_OPEN_READONLY
+        case readonly
+        
+        /// SQLITE_OPEN_READWRITE
+        case readwrite
+        
+        /// SQLITE_OPEN_CREATE
+        case create
+        
+        /// SQLITE_OPEN_URI
+        case uri
+        
+        /// SQLITE_OPEN_MEMORY
+        case memory
+        
+        /// SQLITE_OPEN_NOMUTEX
+        case nomutex
+        
+        /// SQLITE_OPEN_FULLMUTEX
+        case fullmutex
+        
+        /// SQLITE_OPEN_SHAREDCACHE
+        case sharedcache
+        
+        /// SQLITE_OPEN_PRIVATECACHE
+        case privatecache
+        
+        var rawValue: Int32 {
+            switch self {
+            case .readonly:
+                return SQLITE_OPEN_READONLY
+            case .readwrite:
+                return  SQLITE_OPEN_READWRITE
+            case .create:
+                return SQLITE_OPEN_CREATE
+            case .uri:
+                return SQLITE_OPEN_URI
+            case .memory:
+                return SQLITE_OPEN_MEMORY
+            case .nomutex:
+                return SQLITE_OPEN_NOMUTEX
+            case .fullmutex:
+                return SQLITE_OPEN_FULLMUTEX
+            case .sharedcache:
+                return SQLITE_OPEN_SHAREDCACHE
+            case .privatecache:
+                return SQLITE_OPEN_PRIVATECACHE
+            }
+        }
+    }
 
     public var handle: OpaquePointer { return _handle! }
 
     fileprivate var _handle: OpaquePointer? = nil
-
+    
+    /// Initializes a new SQLite connection.
+    ///
+    /// - Parameters:
+    ///
+    ///   - location: The location of the database. Creates a new database if it
+    ///     doesn’t already exist (unless in read-only mode).
+    ///
+    ///     Default: `.inMemory`.
+    ///
+    ///   - flags: sqlite3_open_v2 option flags.
+    ///
+    /// - Returns: A new database connection.
+    public init(_ location: Location = .inMemory, flags: [Flag]) throws {
+        var flags = flags
+        let firstFlag = flags.remove(at: 0)
+        let sqlite3Flags = flags.reduce(firstFlag.rawValue) { $0 | $1.rawValue }
+        
+        try check(sqlite3_open_v2(location.description, &_handle, sqlite3Flags, nil))
+        queue.setSpecific(key: Connection.queueKey, value: queueContext)
+    }
+    
     /// Initializes a new SQLite connection.
     ///
     /// - Parameters:
@@ -102,12 +177,27 @@ public final class Connection {
     ///     Default: `false`.
     ///
     /// - Returns: A new database connection.
-    public init(_ location: Location = .inMemory, readonly: Bool = false) throws {
-        let flags = readonly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE
-        try check(sqlite3_open_v2(location.description, &_handle, flags | SQLITE_OPEN_FULLMUTEX, nil))
-        queue.setSpecific(key: Connection.queueKey, value: queueContext)
+    public convenience init(_ location: Location = .inMemory, readonly: Bool = false) throws {
+        let flags: [Flag] = readonly ? [.readonly, .fullmutex] : [.create, .readwrite, .fullmutex]
+        try self.init(location, flags: flags)
     }
-
+    
+    /// Initializes a new connection to a database.
+    ///
+    /// - Parameters:
+    ///
+    ///   - filename: The location of the database. Creates a new database if
+    ///     it doesn’t already exist (unless in read-only mode).
+    ///
+    ///   - flags: sqlite3_open_v2 option flags.
+    ///
+    /// - Throws: `Result.Error` iff a connection cannot be established.
+    ///
+    /// - Returns: A new database connection.
+    public convenience init(_ filename: String, flags: [Flag]) throws {
+        try self.init(.uri(filename), flags: flags)
+    }
+    
     /// Initializes a new connection to a database.
     ///
     /// - Parameters:
@@ -123,7 +213,8 @@ public final class Connection {
     ///
     /// - Returns: A new database connection.
     public convenience init(_ filename: String, readonly: Bool = false) throws {
-        try self.init(.uri(filename), readonly: readonly)
+        let flags: [Flag] = readonly ? [.readonly, .fullmutex] : [.create, .readwrite, .fullmutex]
+        try self.init(.uri(filename), flags: flags)
     }
 
     deinit {
