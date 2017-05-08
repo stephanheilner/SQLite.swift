@@ -1055,6 +1055,17 @@ extension Connection {
 
 }
 
+public enum SQLiteErrorType {
+    case unexpectedNullValue
+    case noSuchColumn
+    case ambiguousColumn
+}
+
+public struct SQLiteError: Error {
+    let type: SQLiteErrorType
+    let message: String
+}
+
 public struct Row {
 
     fileprivate let columnNames: [String: Int]
@@ -1075,10 +1086,10 @@ public struct Row {
         if let value = try get(Expression<V?>(column)) {
             return value
         } else {
-            throw QueryError.unexpectedNullValue(name: column.template)
+            throw SQLiteError(type: .unexpectedNullValue, message: "Unexpected NULL value in column \(column.template)")
         }
     }
-
+    
     public func get<V: Value>(_ column: Expression<V?>) throws -> V? {
         func valueAtIndex(_ idx: Int) -> V? {
             guard let value = values[idx] as? V.Datatype else { return nil }
@@ -1090,24 +1101,61 @@ public struct Row {
 
             switch similar.count {
             case 0:
-                throw QueryError.noSuchColumn(name: column.template, columns: columnNames.keys.sorted())
+                throw SQLiteError(type: .noSuchColumn, message: "No such column '\(column.template)' in columns: \(columnNames.keys.sorted())")
             case 1:
                 return valueAtIndex(columnNames[similar[0]]!)
             default:
-                throw QueryError.ambiguousColumn(name: column.template, similar: similar)
+                throw SQLiteError(type: .ambiguousColumn, message: "Ambiguous column '\(column.template)' (please disambiguate: \(similar))")
             }
         }
 
         return valueAtIndex(idx)
     }
 
-    public subscript<T : Value>(column: Expression<T>) -> T {
+    // FIXME: rdar://problem/18673897 // subscript<T>…
+
+    public subscript(column: Expression<Blob>) -> Blob {
+        return try! get(column)
+    }
+    public subscript(column: Expression<Blob?>) -> Blob? {
         return try! get(column)
     }
 
-    public subscript<T : Value>(column: Expression<T?>) -> T? {
+    public subscript(column: Expression<Bool>) -> Bool {
         return try! get(column)
     }
+    public subscript(column: Expression<Bool?>) -> Bool? {
+        return try! get(column)
+    }
+
+    public subscript(column: Expression<Double>) -> Double {
+        return try! get(column)
+    }
+    public subscript(column: Expression<Double?>) -> Double? {
+        return try! get(column)
+    }
+
+    public subscript(column: Expression<Int>) -> Int {
+        return try! get(column)
+    }
+    public subscript(column: Expression<Int?>) -> Int? {
+        return try! get(column)
+    }
+
+    public subscript(column: Expression<Int64>) -> Int64 {
+        return try! get(column)
+    }
+    public subscript(column: Expression<Int64?>) -> Int64? {
+        return try! get(column)
+    }
+
+    public subscript(column: Expression<String>) -> String {
+        return try! get(column)
+    }
+    public subscript(column: Expression<String?>) -> String? {
+        return try! get(column)
+    }
+
 }
 
 /// Determines the join operator for a query’s `JOIN` clause.

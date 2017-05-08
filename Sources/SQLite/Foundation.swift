@@ -68,3 +68,41 @@ public var dateFormatter: DateFormatter = {
     formatter.timeZone = TimeZone(secondsFromGMT: 0)
     return formatter
 }()
+
+// FIXME: rdar://problem/18673897 // subscript<T>…
+
+extension QueryType {
+
+    public subscript(column: Expression<Data>) -> Expression<Data> {
+        return namespace(column)
+    }
+    public subscript(column: Expression<Data?>) -> Expression<Data?> {
+        return namespace(column)
+    }
+
+    public subscript(column: Expression<Date>) -> Expression<Date> {
+        return namespace(column)
+    }
+    public subscript(column: Expression<Date?>) -> Expression<Date?> {
+        return namespace(column)
+    }
+
+}
+
+extension Row {
+
+    public subscript(column: Expression<Data>) -> Data {
+        return try! get(column)
+    }
+    public subscript(column: Expression<Data?>) -> Data? {
+        return try! get(column)
+    }
+
+    public subscript(column: Expression<Date>) -> Date {
+        return try! get(column)
+    }
+    public subscript(column: Expression<Date?>) -> Date? {
+        return try! get(column)
+    }
+
+}
