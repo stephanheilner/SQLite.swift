@@ -504,7 +504,16 @@ extension QueryType {
     fileprivate var selectClause: Expressible {
         return " ".join([
             Expression<Void>(literal: clauses.select.distinct ? "SELECT DISTINCT" : "SELECT"),
-            ", ".join(clauses.select.columns),
+            ", ".join(clauses.select.columns.map { column in
+                if let alias = column.expression.alias {
+                    return " ".join([
+                        Expression<Void>(literal: column.expression.template.quote()),
+                        Expression<Void>(literal: "AS"),
+                        Expression<Void>(literal: alias.quote())
+                    ])
+                }
+                return column
+            }),
             Expression<Void>(literal: "FROM"),
             tableName(alias: true)
         ])
@@ -850,10 +859,12 @@ public struct Select<T> : ExpressionType {
 
     public var template: String
     public var bindings: [Binding?]
+    public var alias: String?
 
-    public init(_ template: String, _ bindings: [Binding?]) {
+    public init(_ template: String, _ bindings: [Binding?], _ alias: String? = nil) {
         self.template = template
         self.bindings = bindings
+        self.alias = alias
     }
 
 }
@@ -862,10 +873,12 @@ public struct Insert : ExpressionType {
 
     public var template: String
     public var bindings: [Binding?]
-
-    public init(_ template: String, _ bindings: [Binding?]) {
+    public var alias: String?
+    
+    public init(_ template: String, _ bindings: [Binding?], _ alias: String? = nil) {
         self.template = template
         self.bindings = bindings
+        self.alias = alias
     }
 
 }
@@ -874,10 +887,12 @@ public struct Update : ExpressionType {
 
     public var template: String
     public var bindings: [Binding?]
-
-    public init(_ template: String, _ bindings: [Binding?]) {
+    public var alias: String?
+    
+    public init(_ template: String, _ bindings: [Binding?], _ alias: String? = nil) {
         self.template = template
         self.bindings = bindings
+        self.alias = alias
     }
 
 }
@@ -886,10 +901,12 @@ public struct Delete : ExpressionType {
 
     public var template: String
     public var bindings: [Binding?]
-
-    public init(_ template: String, _ bindings: [Binding?]) {
+    public var alias: String?
+    
+    public init(_ template: String, _ bindings: [Binding?], _ alias: String? = nil) {
         self.template = template
         self.bindings = bindings
+        self.alias = alias
     }
 
 }
@@ -972,7 +989,7 @@ extension Connection {
                 continue
             }
             
-            columnNames[each.expression.template] = idx
+            columnNames[each.expression.alias ?? each.expression.template] = idx
             idx += 1
         }
         return columnNames
