@@ -22,6 +22,8 @@
 // THE SOFTWARE.
 //
 
+import Foundation
+
 public protocol QueryType : Expressible {
 
     var clauses: QueryClauses { get set }
@@ -874,7 +876,7 @@ public struct Insert : ExpressionType {
     public var template: String
     public var bindings: [Binding?]
     public var alias: String?
-    
+
     public init(_ template: String, _ bindings: [Binding?], _ alias: String? = nil) {
         self.template = template
         self.bindings = bindings
@@ -888,7 +890,7 @@ public struct Update : ExpressionType {
     public var template: String
     public var bindings: [Binding?]
     public var alias: String?
-    
+
     public init(_ template: String, _ bindings: [Binding?], _ alias: String? = nil) {
         self.template = template
         self.bindings = bindings
@@ -902,7 +904,7 @@ public struct Delete : ExpressionType {
     public var template: String
     public var bindings: [Binding?]
     public var alias: String?
-    
+
     public init(_ template: String, _ bindings: [Binding?], _ alias: String? = nil) {
         self.template = template
         self.bindings = bindings
@@ -911,35 +913,26 @@ public struct Delete : ExpressionType {
 
 }
 
-public struct RowCursor {
+
+public struct RowIterator: FailableIterator {
+    public typealias Element = Row
     let statement: Statement
     let columnNames: [String: Int]
-    
-    public func next() throws -> Row? {
-        return try statement.rowCursorNext().flatMap { Row(columnNames, $0) }
+
+    public func failableNext() throws -> Row? {
+        return try statement.failableNext().flatMap { Row(columnNames, $0) }
     }
-    
-    public func map<T>(_ transform: (Row) throws -> T) throws -> [T] {
+
+    public func map<T>(_ transform: (Element) throws -> T) throws -> [T] {
         var elements = [T]()
-        while true {
-            if let row = try next() {
-                elements.append(try transform(row))
-            } else {
-                break
-            }
+        while let row = try failableNext() {
+            elements.append(try transform(row))
         }
-        
         return elements
     }
 }
 
 extension Connection {
-    
-    public func prepareCursor(_ query: QueryType) throws -> RowCursor {
-        let expression = query.expression
-        let statement = try prepare(expression.template, expression.bindings)
-        return RowCursor(statement: statement, columnNames: try columnNamesForQuery(query))
-    }
 
     public func prepare(_ query: QueryType) throws -> AnySequence<Row> {
         let expression = query.expression
@@ -952,10 +945,17 @@ extension Connection {
         }
     }
     
+
+    public func prepareRowIterator(_ query: QueryType) throws -> RowIterator {
+        let expression = query.expression
+        let statement = try prepare(expression.template, expression.bindings)
+        return RowIterator(statement: statement, columnNames: try columnNamesForQuery(query))
+    }
+
     private func columnNamesForQuery(_ query: QueryType) throws -> [String: Int] {
         var (columnNames, idx) = ([String: Int](), 0)
         column: for each in query.clauses.select.columns {
-            var names = each.expression.template.characters.split { $0 == "." }.map(String.init)
+            var names = each.expression.template.split { $0 == "." }.map(String.init)
             let column = names.removeLast()
             let namespace = names.joined(separator: ".")
             
@@ -980,8 +980,9 @@ extension Connection {
                             try expandGlob(true)(q)
                             continue column
                         }
+                        throw QueryError.noSuchTable(name: namespace)
                     }
-                    fatalError("no such table: \(namespace)")
+                    throw QueryError.noSuchTable(name: namespace)
                 }
                 for q in queries {
                     try expandGlob(query.clauses.join.count > 0)(q)
@@ -1018,7 +1019,7 @@ extension Connection {
     }
 
     public func pluck(_ query: QueryType) throws -> Row? {
-        return try prepareCursor(query.limit(1, query.clauses.limit?.offset)).next()
+        return try prepareRowIterator(query.limit(1, query.clauses.limit?.offset)).failableNext()
     }
 
     /// Runs an `Insert` query.
@@ -1072,26 +1073,22 @@ extension Connection {
 
 }
 
-public enum SQLiteErrorType {
-    case unexpectedNullValue
-    case noSuchColumn
-    case ambiguousColumn
-}
-
-public struct SQLiteError: Error {
-    let type: SQLiteErrorType
-    let message: String
-}
-
 public struct Row {
 
-    fileprivate let columnNames: [String: Int]
+    let columnNames: [String: Int]
 
     fileprivate let values: [Binding?]
 
     internal init(_ columnNames: [String: Int], _ values: [Binding?]) {
         self.columnNames = columnNames
         self.values = values
+    }
+
+    func hasValue(for column: String) -> Bool {
+        guard let idx = columnNames[column.quote()] else {
+            return false
+        }
+        return values[idx] != nil
     }
 
     /// Returns a row’s value for the given column.
@@ -1103,10 +1100,10 @@ public struct Row {
         if let value = try get(Expression<V?>(column)) {
             return value
         } else {
-            throw SQLiteError(type: .unexpectedNullValue, message: "Unexpected NULL value in column \(column.template)")
+            throw QueryError.unexpectedNullValue(name: column.template)
         }
     }
-    
+
     public func get<V: Value>(_ column: Expression<V?>) throws -> V? {
         func valueAtIndex(_ idx: Int) -> V? {
             guard let value = values[idx] as? V.Datatype else { return nil }
@@ -1118,61 +1115,24 @@ public struct Row {
 
             switch similar.count {
             case 0:
-                throw SQLiteError(type: .noSuchColumn, message: "No such column '\(column.template)' in columns: \(columnNames.keys.sorted())")
+                throw QueryError.noSuchColumn(name: column.template, columns: columnNames.keys.sorted())
             case 1:
                 return valueAtIndex(columnNames[similar[0]]!)
             default:
-                throw SQLiteError(type: .ambiguousColumn, message: "Ambiguous column '\(column.template)' (please disambiguate: \(similar))")
+                throw QueryError.ambiguousColumn(name: column.template, similar: similar)
             }
         }
 
         return valueAtIndex(idx)
     }
 
-    // FIXME: rdar://problem/18673897 // subscript<T>…
-
-    public subscript(column: Expression<Blob>) -> Blob {
-        return try! get(column)
-    }
-    public subscript(column: Expression<Blob?>) -> Blob? {
+    public subscript<T : Value>(column: Expression<T>) -> T {
         return try! get(column)
     }
 
-    public subscript(column: Expression<Bool>) -> Bool {
+    public subscript<T : Value>(column: Expression<T?>) -> T? {
         return try! get(column)
     }
-    public subscript(column: Expression<Bool?>) -> Bool? {
-        return try! get(column)
-    }
-
-    public subscript(column: Expression<Double>) -> Double {
-        return try! get(column)
-    }
-    public subscript(column: Expression<Double?>) -> Double? {
-        return try! get(column)
-    }
-
-    public subscript(column: Expression<Int>) -> Int {
-        return try! get(column)
-    }
-    public subscript(column: Expression<Int?>) -> Int? {
-        return try! get(column)
-    }
-
-    public subscript(column: Expression<Int64>) -> Int64 {
-        return try! get(column)
-    }
-    public subscript(column: Expression<Int64?>) -> Int64? {
-        return try! get(column)
-    }
-
-    public subscript(column: Expression<String>) -> String {
-        return try! get(column)
-    }
-    public subscript(column: Expression<String?>) -> String? {
-        return try! get(column)
-    }
-
 }
 
 /// Determines the join operator for a query’s `JOIN` clause.
@@ -1229,3 +1189,4 @@ public struct QueryClauses {
     }
 
 }
+

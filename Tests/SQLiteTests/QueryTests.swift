@@ -1,4 +1,13 @@
 import XCTest
+#if SQLITE_SWIFT_STANDALONE
+import sqlite3
+#elseif SQLITE_SWIFT_SQLCIPHER
+import SQLCipher
+#elseif os(Linux)
+import CSQLite
+#else
+import SQLite3
+#endif
 @testable import SQLite
 
 class QueryTests : XCTestCase {
@@ -238,6 +247,29 @@ class QueryTests : XCTestCase {
         )
     }
 
+    func test_insert_encodable() throws {
+        let emails = Table("emails")
+        let value = TestCodable(int: 1, string: "2", bool: true, float: 3, double: 4, optional: nil, sub: nil)
+        let insert = try emails.insert(value)
+        AssertSQL(
+            "INSERT INTO \"emails\" (\"int\", \"string\", \"bool\", \"float\", \"double\") VALUES (1, '2', 1, 3.0, 4.0)",
+            insert
+        )
+    }
+
+    func test_insert_encodable_with_nested_encodable() throws {
+        let emails = Table("emails")
+        let value1 = TestCodable(int: 1, string: "2", bool: true, float: 3, double: 4, optional: nil, sub: nil)
+        let value = TestCodable(int: 1, string: "2", bool: true, float: 3, double: 4, optional: "optional", sub: value1)
+        let insert = try emails.insert(value)
+        let encodedJSON = try JSONEncoder().encode(value1)
+        let encodedJSONString = String(data: encodedJSON, encoding: .utf8)!
+        AssertSQL(
+            "INSERT INTO \"emails\" (\"int\", \"string\", \"bool\", \"float\", \"double\", \"optional\", \"sub\") VALUES (1, '2', 1, 3.0, 4.0, 'optional', '\(encodedJSONString)')",
+            insert
+        )
+    }
+
     func test_update_compilesUpdateExpression() {
         AssertSQL(
             "UPDATE \"users\" SET \"age\" = 30, \"admin\" = 1 WHERE (\"id\" = 1)",
@@ -249,6 +281,29 @@ class QueryTests : XCTestCase {
         AssertSQL(
             "UPDATE \"users\" SET \"age\" = 30 ORDER BY \"id\" LIMIT 1",
             users.order(id).limit(1).update(age <- 30)
+        )
+    }
+
+    func test_update_encodable() throws {
+        let emails = Table("emails")
+        let value = TestCodable(int: 1, string: "2", bool: true, float: 3, double: 4, optional: nil, sub: nil)
+        let update = try emails.update(value)
+        AssertSQL(
+            "UPDATE \"emails\" SET \"int\" = 1, \"string\" = '2', \"bool\" = 1, \"float\" = 3.0, \"double\" = 4.0",
+            update
+        )
+    }
+
+    func test_update_encodable_with_nested_encodable() throws {
+        let emails = Table("emails")
+        let value1 = TestCodable(int: 1, string: "2", bool: true, float: 3, double: 4, optional: nil, sub: nil)
+        let value = TestCodable(int: 1, string: "2", bool: true, float: 3, double: 4, optional: nil, sub: value1)
+        let update = try emails.update(value)
+        let encodedJSON = try JSONEncoder().encode(value1)
+        let encodedJSONString = String(data: encodedJSON, encoding: .utf8)!
+        AssertSQL(
+            "UPDATE \"emails\" SET \"int\" = 1, \"string\" = '2', \"bool\" = 1, \"float\" = 3.0, \"double\" = 4.0, \"sub\" = '\(encodedJSONString)'",
+            update
         )
     }
 
@@ -344,6 +399,25 @@ class QueryIntegrationTests : SQLiteTestCase {
         }
     }
 
+    func test_prepareRowIterator() {
+        let names = ["a", "b", "c"]
+        try! InsertUsers(names)
+
+        let emailColumn = Expression<String>("email")
+        let emails = try! db.prepareRowIterator(users).map { $0[emailColumn] }
+
+        XCTAssertEqual(names.map({ "\($0)@example.com" }), emails.sorted())
+    }
+
+    func test_ambiguousMap() {
+        let names = ["a", "b", "c"]
+        try! InsertUsers(names)
+
+        let emails = try! db.prepare("select email from users", []).map { $0[0] as! String  }
+
+        XCTAssertEqual(names.map({ "\($0)@example.com" }), emails.sorted())
+    }
+
     func test_select_optional() {
         let managerId = Expression<Int64?>("manager_id")
         let managers = users.alias("managers")
@@ -356,14 +430,49 @@ class QueryIntegrationTests : SQLiteTestCase {
         }
     }
     
-    func test_prepareCursor() {
+    func test_prepareRowIterator() {
         let names = ["a", "b", "c"]
         try! InsertUsers(names)
         
         let emailColumn = Expression<String>("email")
-        let emails = try! db.prepareCursor(users).map { $0[emailColumn] }
+        let emails = try! db.prepareRowIterator(users).map { $0[emailColumn] }
         
         XCTAssertEqual(names.map({ "\($0)@example.com" }), emails.sorted())
+    }
+
+    func test_select_codable() throws {
+        let table = Table("codable")
+        try db.run(table.create { builder in
+            builder.column(Expression<Int>("int"))
+            builder.column(Expression<String>("string"))
+            builder.column(Expression<Bool>("bool"))
+            builder.column(Expression<Double>("float"))
+            builder.column(Expression<Double>("double"))
+            builder.column(Expression<String?>("optional"))
+            builder.column(Expression<Data>("sub"))
+        })
+
+        let value1 = TestCodable(int: 1, string: "2", bool: true, float: 3, double: 4, optional: nil, sub: nil)
+        let value = TestCodable(int: 5, string: "6", bool: true, float: 7, double: 8, optional: "optional", sub: value1)
+
+        try db.run(table.insert(value))
+
+        let rows = try db.prepare(table)
+        let values: [TestCodable] = try rows.map({ try $0.decode() })
+        XCTAssertEqual(values.count, 1)
+        XCTAssertEqual(values[0].int, 5)
+        XCTAssertEqual(values[0].string, "6")
+        XCTAssertEqual(values[0].bool, true)
+        XCTAssertEqual(values[0].float, 7)
+        XCTAssertEqual(values[0].double, 8)
+        XCTAssertEqual(values[0].optional, "optional")
+        XCTAssertEqual(values[0].sub?.int, 1)
+        XCTAssertEqual(values[0].sub?.string, "2")
+        XCTAssertEqual(values[0].sub?.bool, true)
+        XCTAssertEqual(values[0].sub?.float, 3)
+        XCTAssertEqual(values[0].sub?.double, 4)
+        XCTAssertNil(values[0].sub?.optional)
+        XCTAssertNil(values[0].sub?.sub)
     }
 
     func test_scalar() {
@@ -426,6 +535,18 @@ class QueryIntegrationTests : SQLiteTestCase {
             } else {
                 XCTFail("unexpected error: \(error)")
             }
+        }
+    }
+
+    func test_catchConstraintError() {
+        try! db.run(users.insert(email <- "alice@example.com"))
+        do {
+            try db.run(users.insert(email <- "alice@example.com"))
+            XCTFail("expected error")
+        } catch let Result.error(_, code, _) where code == SQLITE_CONSTRAINT {
+            // expected
+        } catch let error {
+            XCTFail("unexpected error: \(error)")
         }
     }
 }

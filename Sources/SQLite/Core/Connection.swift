@@ -22,13 +22,15 @@
 // THE SOFTWARE.
 //
 
-import Foundation.NSUUID
+import Foundation
 import Dispatch
 #if SQLITE_SWIFT_STANDALONE
 import sqlite3
 #elseif SQLITE_SWIFT_SQLCIPHER
 import SQLCipher
-#elseif SWIFT_PACKAGE || COCOAPODS
+#elseif os(Linux)
+import CSQLite
+#else
 import SQLite3
 #endif
 
@@ -360,11 +362,11 @@ public final class Connection {
             try self.run(begin)
             do {
                 try block()
+                try self.run(commit)
             } catch {
                 try self.run(rollback)
                 throw error
             }
-            try self.run(commit)
         }
     }
 
@@ -413,7 +415,7 @@ public final class Connection {
     ///
     ///       db.trace { SQL in print(SQL) }
     public func trace(_ callback: ((String) -> Void)?) {
-        #if SQLITE_SWIFT_SQLCIPHER
+        #if SQLITE_SWIFT_SQLCIPHER || os(Linux)
             trace_v1(callback)
         #else
             if #available(iOS 10.0, OSX 10.12, tvOS 10.0, watchOS 3.0, *) {
@@ -575,7 +577,7 @@ public final class Connection {
             } else if let result = result as? Int64 {
                 sqlite3_result_int64(context, result)
             } else if let result = result as? String {
-                sqlite3_result_text(context, result, Int32(result.characters.count), SQLITE_TRANSIENT)
+                sqlite3_result_text(context, result, Int32(result.count), SQLITE_TRANSIENT)
             } else if result == nil {
                 sqlite3_result_null(context)
             } else {
@@ -583,9 +585,11 @@ public final class Connection {
             }
         }
         var flags = SQLITE_UTF8
+        #if !os(Linux)
         if deterministic {
             flags |= SQLITE_DETERMINISTIC
         }
+        #endif
         sqlite3_create_function_v2(handle, function, Int32(argc), flags, unsafeBitCast(box, to: UnsafeMutableRawPointer.self), { context, argc, value in
             let function = unsafeBitCast(sqlite3_user_data(context), to: Function.self)
             function(context, argc, value)
@@ -677,6 +681,13 @@ public enum Result : Error {
 
     fileprivate static let successCodes: Set = [SQLITE_OK, SQLITE_ROW, SQLITE_DONE]
 
+    /// Represents a SQLite specific [error code](https://sqlite.org/rescode.html)
+    ///
+    /// - message: English-language text that describes the error
+    ///
+    /// - code: SQLite [error code](https://sqlite.org/rescode.html#primary_result_code_list)
+    ///
+    /// - statement: the statement which produced the error
     case error(message: String, code: Int32, statement: Statement?)
 
     init?(errorCode: Int32, connection: Connection, statement: Statement? = nil) {
@@ -702,7 +713,7 @@ extension Result : CustomStringConvertible {
     }
 }
 
-#if !SQLITE_SWIFT_SQLCIPHER
+#if !SQLITE_SWIFT_SQLCIPHER && !os(Linux)
 @available(iOS 10.0, OSX 10.12, tvOS 10.0, watchOS 3.0, *)
 extension Connection {
     fileprivate func trace_v2(_ callback: ((String) -> Void)?) {
