@@ -1028,6 +1028,10 @@ extension Connection {
     public func prepareRowIterator(_ statement: String, bindings: [Binding?]) throws -> RowIterator {
         try prepare(statement, bindings).prepareRowIterator()
     }
+    
+    public func prepareRowIterator(_ statement: String, bindings: [String: Binding?]) throws -> RowIterator {
+        try prepare(statement, bindings).prepareRowIterator()
+    }
 
     private func columnNamesForQuery(_ query: QueryType) throws -> [String: Int] {
         var (columnNames, idx) = ([String: Int](), 0)
